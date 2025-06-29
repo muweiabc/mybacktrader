@@ -73,7 +73,7 @@ def parse_args():
         description='BidAsk to OHLC')
 
     parser.add_argument('--data', required=False,
-                        default='../../datas/bidask2.csv',
+                        default='./datas/bidask2.csv',
                         help='Data file to be read in')
 
     parser.add_argument('--compression', required=False, default=2, type=int,

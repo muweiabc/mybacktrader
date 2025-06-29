@@ -182,7 +182,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description='TimeReturn')
 
     parser.add_argument('--data', '-d',
-                        default='../../datas/2005-2006-day-001.txt',
+                        default='./datas/2005-2006-day-001.txt',
                         help='data to add to the system')
 
     parser.add_argument('--fromdate', '-f',
@@ -229,7 +229,7 @@ def parse_args():
                         help='Stake to apply in each operation')
 
     parser.add_argument('--plot', '-p', action='store_true',
-                        help='Plot the read data')
+                        help='Plot the read data', default=True)
 
     parser.add_argument('--numfigs', '-n', default=1,
                         help='Plot using numfigs figures')
