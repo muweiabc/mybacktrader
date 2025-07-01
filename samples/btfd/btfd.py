@@ -50,16 +50,21 @@ class ValueUnlever(bt.observers.Value):
 
 class St(bt.Strategy):
     params = (
-        ('fall', -0.01),
-        ('hold', 2),
-        ('approach', 'highlow'),
-        ('target', 1.0),
-        ('prorder', False),
-        ('prtrade', False),
-        ('prdata', False),
+        ('fall', -0.01),      # 下跌阈值：-1%
+        ('hold', 2),          # 持仓时间：2个bar
+        ('approach', 'highlow'), # 计算下跌幅度的方法
+        ('target', 1.0),      # 目标仓位：100%
+        ('prorder', False),   # 是否打印订单信息
+        ('prtrade', False),   # 是否打印交易信息
+        ('prdata', False),    # 是否打印数据信息
     )
 
     def __init__(self):
+        # 四种方法对比：
+        # closeclose：收盘价相对于前一日收盘价的跌幅
+        # openclose：收盘价相对于当日开盘价的跌幅
+        # highclose：收盘价相对于当日最高价的跌幅
+        # highlow：当日最低价相对于最高价的跌幅（默认方法）
         if self.p.approach == 'closeclose':
             self.pctdown = self.data.close / self.data.close(-1) - 1.0
         elif self.p.approach == 'openclose':
@@ -68,10 +73,10 @@ class St(bt.Strategy):
             self.pctdown = self.data.close / self.data.high - 1.0
         elif self.p.approach == 'highlow':
             self.pctdown = self.data.low / self.data.high - 1.0
-
+        
     def next(self):
         if self.position:
-            if len(self) == self.barexit:
+            if len(self) == self.barexit:   # 达到预设的退出时间
                 self.close()
                 if self.p.prdata:
                     print(','.join(str(x) for x in
@@ -80,9 +85,9 @@ class St(bt.Strategy):
                                     self.data.close[0],
                                     float('NaN')]))
         else:
-            if self.pctdown <= self.p.fall:
-                self.order_target_percent(target=self.p.target)
-                self.barexit = len(self) + self.p.hold
+            if self.pctdown <= self.p.fall: # 下跌幅度超过阈值（-1%）
+                self.order_target_percent(target=self.p.target) # 买入100%仓位
+                self.barexit = len(self) + self.p.hold  # 设置退出时间
 
                 if self.p.prdata:
                     print(','.join(str(x) for x in
@@ -231,3 +236,13 @@ def parse_args(pargs=None):
 
 if __name__ == '__main__':
     runstrat()
+
+# 策略使用场景
+# 适合的市场：
+# 波动性较大的市场
+# 有明确趋势的市场
+# 适合做短线的市场
+# 不适合的市场：
+# 单边下跌市场
+# 低波动性市场
+# 需要长期持有的投资
