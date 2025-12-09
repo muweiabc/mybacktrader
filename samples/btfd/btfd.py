@@ -27,7 +27,8 @@ from __future__ import (absolute_import, division, print_function,
 
 import argparse
 import datetime
-
+import os
+import sys
 import backtrader as bt
 
 
@@ -157,13 +158,35 @@ def runstrat(args=None):
     for a, d in ((getattr(args, x), x) for x in ['fromdate', 'todate']):
         kwargs[d] = datetime.datetime.strptime(a, dtfmt + tmfmt * ('T' in a))
 
-    if not args.offline:
-        YahooData = bt.feeds.YahooFinanceData
-    else:
+    if args.offline:
+        # 使用本地CSV文件
+        data_path = os.path.join('datas', args.data)
+        if not os.path.exists(data_path):
+            print(f"错误：找不到数据文件 {data_path}")
+            print("可用的数据文件：")
+            datas_dir = os.path.join(os.path.dirname(__file__), '..', '..', 'datas')
+            if os.path.exists(datas_dir):
+                for file in os.listdir(datas_dir):
+                    if file.endswith(('.txt', '.csv')):
+                        print(f"  - {file}")
+            print(f"\n请使用 --data 参数指定一个可用的数据文件，例如：")
+            print(f"  python btfd.py --offline --data yhoo-1996-2014.txt")
+            sys.exit(1)
+        
         YahooData = bt.feeds.YahooFinanceCSVData
 
     # Data feed - no plot - observer will do the job
-    data = YahooData(dataname=args.data, plot=False, **kwargs)
+        data = YahooData(dataname=data_path, plot=False, **kwargs)
+    else:
+        # 尝试从Yahoo Finance下载数据
+        try:
+            YahooData = bt.feeds.YahooFinanceData
+            data = YahooData(dataname=args.data, plot=False, **kwargs)
+        except Exception as e:
+            print(f"从Yahoo Finance下载数据失败: {e}")
+            print("建议使用本地数据文件，请尝试以下命令：")
+            print(f"  python btfd.py --offline --data yhoo-1996-2014.txt")
+            sys.exit(1)
     cerebro.adddata(data)
 
     # Broker
@@ -198,8 +221,9 @@ def parse_args(pargs=None):
     parser.add_argument('--offline', required=False, action='store_true',
                         help='Use offline file with ticker name')
 
-    parser.add_argument('--data', required=False, default='^GSPC',
-                        metavar='TICKER', help='Yahoo ticker to download')
+    parser.add_argument('--data', required=False, default='yhoo-1996-2014.txt',
+                        metavar='TICKER', help='Yahoo ticker to download or local file name')
+
 
     parser.add_argument('--fromdate', required=False, default='1990-01-01',
                         metavar='YYYY-MM-DD[THH:MM:SS]',

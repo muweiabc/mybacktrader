@@ -88,7 +88,7 @@ def parse_args(pargs=None):
         )
     )
 
-    parser.add_argument('--data0', default='../../datas/orcl-1995-2014.txt',
+    parser.add_argument('--data0', default='./datas/orcl-1995-2014.txt',
                         required=False, help='Data to read in')
 
     # Defaults for dates
@@ -110,7 +110,7 @@ def parse_args(pargs=None):
     parser.add_argument('--strat', required=False, default='',
                         metavar='kwargs', help='kwargs in key=value format')
 
-    parser.add_argument('--plot', required=False, default='',
+    parser.add_argument('--plot', required=False, default='a',
                         nargs='?', const='{}',
                         metavar='kwargs', help='kwargs in key=value format')
 
