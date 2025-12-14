@@ -1,7 +1,6 @@
 {
     "version": "0.2.0",
     "configurations": [
-        
         {
             "name": "Backtrader Strategy",
             "type": "debugpy",
@@ -19,6 +18,190 @@
             "console": "integratedTerminal",
             "justMyCode": true,
             "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "BTFD - 默认配置",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/samples/btfd/btfd.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "args": [
+                // "--offline",
+                // "--data", "yhoo-1996-2014.txt",
+                "--data", "aapl",
+                "--fromdate", "2024-01-01",
+                "--todate", "2025-10-01",
+                "--cerebro", "stdstats=False",
+                "--broker", "cash=100000.0, coc=True",
+                "--valobserver", "assetstart=100000.0",
+                "--strat", "approach=\"highlow\"",
+                "--comminfo", "leverage=2.0",
+                "--plot", "volume=False"
+            ],
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            }
+        },
+        {
+            "name": "BTFD - 收盘价策略",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/samples/btfd/btfd.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "args": [
+                "--offline",
+                "--data", "yhoo-1996-2014.txt",
+                "--fromdate", "1990-01-01",
+                "--todate", "2016-10-01",
+                "--cerebro", "stdstats=False",
+                "--broker", "cash=100000.0, coc=True",
+                "--valobserver", "assetstart=100000.0",
+                "--strat", "approach=\"closeclose\"",
+                "--comminfo", "leverage=2.0",
+                "--plot", "volume=False"
+            ],
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            }
+        },
+        {
+            "name": "BTFD - 开盘收盘策略",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/samples/btfd/btfd.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "args": [
+                "--offline",
+                "--data", "yhoo-1996-2014.txt",
+                "--fromdate", "1990-01-01",
+                "--todate", "2016-10-01",
+                "--cerebro", "stdstats=False",
+                "--broker", "cash=100000.0, coc=True",
+                "--valobserver", "assetstart=100000.0",
+                "--strat", "approach=\"openclose\"",
+                "--comminfo", "leverage=2.0",
+                "--plot", "volume=False"
+            ],
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            }
+        },
+        {
+            "name": "BTFD - 最高收盘策略",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/samples/btfd/btfd.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "args": [
+                "--offline",
+                "--data", "yhoo-1996-2014.txt",
+                "--fromdate", "1990-01-01",
+                "--todate", "2016-10-01",
+                "--cerebro", "stdstats=False",
+                "--broker", "cash=100000.0, coc=True",
+                "--valobserver", "assetstart=100000.0",
+                "--strat", "approach=\"highclose\"",
+                "--comminfo", "leverage=2.0",
+                "--plot", "volume=False"
+            ],
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            }
+        },
+        {
+            "name": "BTFD - 自定义参数",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/samples/btfd/btfd.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "args": [
+                "--offline",
+                "--data", "orcl-1995-2014.txt",
+                "--fromdate", "2000-01-01",
+                "--todate", "2010-12-31",
+                "--cerebro", "stdstats=False",
+                "--broker", "cash=50000.0, coc=True",
+                "--valobserver", "assetstart=50000.0",
+                "--strat", "approach=\"highlow\", fall=-0.02, hold=3, target=0.8",
+                "--comminfo", "leverage=1.5",
+                "--plot", "volume=False"
+            ],
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            }
+        },
+        {
+            "name": "BTFD - 在线数据",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/samples/btfd/btfd.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "args": [
+                "--data", "AAPL",
+                "--fromdate", "2020-01-01",
+                "--todate", "2023-12-31",
+                "--cerebro", "stdstats=False",
+                "--broker", "cash=100000.0, coc=True",
+                "--valobserver", "assetstart=100000.0",
+                "--strat", "approach=\"highlow\"",
+                "--comminfo", "leverage=2.0",
+                "--plot", "volume=False"
+            ],
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            }
+        },
+        {
+            "name": "BTFD - 调试模式",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/samples/btfd/btfd.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "args": [
+                "--offline",
+                "--data", "yhoo-1996-2014.txt",
+                "--fromdate", "2000-01-01",
+                "--todate", "2001-12-31",
+                "--cerebro", "stdstats=False",
+                "--broker", "cash=100000.0, coc=True",
+                "--valobserver", "assetstart=100000.0",
+                "--strat", "approach=\"highlow\", prorder=True, prtrade=True, prdata=True",
+                "--comminfo", "leverage=2.0",
+                "--plot", "volume=False"
+            ],
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            }
+        },
+        {
+            "name": "BTFD - 快速测试",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/samples/btfd/btfd.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "args": [
+                "--offline",
+                "--data", "nvda-1999-2014.txt",
+                "--fromdate", "2010-01-01",
+                "--todate", "2012-12-31",
+                "--cerebro", "stdstats=False",
+                "--broker", "cash=50000.0, coc=True",
+                "--valobserver", "assetstart=50000.0",
+                "--strat", "approach=\"highlow\", fall=-0.015, hold=1, target=1.0",
+                "--comminfo", "leverage=1.0",
+                "--plot", "volume=False"
+            ],
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            }
         }
     ]
 }

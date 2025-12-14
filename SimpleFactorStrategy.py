@@ -3,43 +3,10 @@ from __future__ import (absolute_import, division, print_function,
 
 import backtrader as bt
 import pandas as pd
+from utils import setup_chinese_font
 import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
 from datetime import datetime
-import platform
-
-# 设置中文字体 - 根据操作系统选择合适字体
-def setup_chinese_font():
-    """根据操作系统设置中文字体"""
-    system = platform.system()
-    if system == 'Darwin':  # macOS
-        # macOS 常见中文字体
-        chinese_fonts = ['PingFang SC', 'STHeiti', 'Heiti SC', 'Arial Unicode MS', 'STSong']
-    elif system == 'Windows':
-        # Windows 常见中文字体
-        chinese_fonts = ['SimHei', 'Microsoft YaHei', 'KaiTi', 'FangSong']
-    else:  # Linux
-        # Linux 常见中文字体
-        chinese_fonts = ['WenQuanYi Micro Hei', 'WenQuanYi Zen Hei', 'Noto Sans CJK SC']
-    
-    # 尝试设置字体
-    import matplotlib.font_manager as fm
-    available_fonts = [f.name for f in fm.fontManager.ttflist]
-    
-    for font in chinese_fonts:
-        if font in available_fonts:
-            plt.rcParams['font.sans-serif'] = [font] + plt.rcParams['font.sans-serif']
-            print(f'已设置中文字体: {font}')
-            break
-    else:
-        # 如果找不到，尝试使用系统默认字体
-        print('警告: 未找到合适的中文字体，可能无法正确显示中文')
-        # 使用 Arial Unicode MS 作为备选（如果可用）
-        if 'Arial Unicode MS' in available_fonts:
-            plt.rcParams['font.sans-serif'] = ['Arial Unicode MS'] + plt.rcParams['font.sans-serif']
-    
-    plt.rcParams['axes.unicode_minus'] = False  # 解决负号显示问题
-
+import matplotlib.dates as mdates
 # 初始化中文字体
 setup_chinese_font()
 
@@ -52,13 +19,13 @@ class SimpleFactorStrategy(bt.Strategy):
     params = (
         ('momentum_period', 20),  # 动量计算周期
         ('top_n_stocks', 5),      # 每期买入排名前N的股票数量
-        ('rebalance_monthday', 1),# 每月1号换仓
+        ('rebalance_period', 'monthly'),  # 换仓周期: 'monthly' (每月) 或 'weekly' (每周)
     )
 
     def __init__(self):
         self.ranking = []
         self.order_refs = {} # 用于追踪订单
-        self.last_rebalance_date = None
+        self.last_rebalance_key = None  # 记录上次换仓的时间键（月份或周数）
         
         # 记录每日资产价值用于绘图
         self.portfolio_values = []
@@ -75,7 +42,17 @@ class SimpleFactorStrategy(bt.Strategy):
                                           )
             self.momentum_indicators[data._name] = roc
 
+    # def prenext(self):
+    #     self.next()
+
     def next(self):
+        # for d in self.datas:
+        #     if not len(d):  # 等价于：数据还没开始
+        #         continue     # 新股跳过
+        #     # 对已有数据的股票执行策略逻辑
+        self.next1()
+
+    def next1(self):
         # 记录每日资产价值
         current_date = self.datas[0].datetime.date(0)
         current_value = self.broker.getvalue()
@@ -96,18 +73,24 @@ class SimpleFactorStrategy(bt.Strategy):
                 drawdown = 0.0
             self.drawdowns.append(drawdown)
         
-        # 2. 检查是否是换仓日 (例如，每月的第一天)
+        # 2. 检查是否是换仓日
+        # 根据 rebalance_period 参数决定换仓周期
+        if self.p.rebalance_period == 'weekly':
+            # 按周换仓：使用 (年份, 周数) 作为键
+            current_key = (current_date.year, current_date.isocalendar()[1])
+            period_name = '周'
+        else:  # 默认按月换仓
+            # 按月换仓：使用 (年份, 月份) 作为键
+            current_key = (current_date.year, current_date.month)
+            period_name = '月'
         
-        # 仅在指定日期执行，避免在同一天重复计算
-        if current_date.day != self.p.rebalance_monthday:
-            return
-
-        # 检查是否是本月第一次执行
-        if self.last_rebalance_date and self.last_rebalance_date.month == current_date.month:
+        # 如果当前周期与上次换仓周期相同，跳过
+        if self.last_rebalance_key == current_key:
             return
         
-        self.last_rebalance_date = current_date
-        self.log(f'--- 换仓日 {current_date}：开始计算因子并轮动 ---')
+        # 这是新周期的第一个交易日，执行换仓
+        self.last_rebalance_key = current_key
+        self.log(f'--- 换仓日 {current_date} (按{period_name}换仓)：开始计算因子并轮动 ---')
 
         # 3. 计算因子并进行排序
 
@@ -131,7 +114,8 @@ class SimpleFactorStrategy(bt.Strategy):
 
             # 组合因子 (简化为相加)
             # 实际中会进行标准化、加权和回归等复杂处理
-            composite_score = mom_score + (val_score * 1000) # 估值权重放大
+            composite_score = mom_score + (val_score * 100) # 估值权重放大
+            # print(f'{name} 动量得分: {mom_score}, 估值得分: {val_score}, 综合得分: {composite_score}')
 
             candidates.append({
                 'name': name,
@@ -309,15 +293,18 @@ def plot_equity_curve(strategy, initial_value, final_value):
 
 # --- 回测运行部分 ---
 
-if __name__ == '__main__':
+def main(num_stocks=100, top_n_stocks=3):
+
     import os
     
     cerebro = bt.Cerebro()
     cerebro.broker.setcash(100000.0)
     cerebro.broker.setcommission(commission=0.001)
 
-    # 读取 wind_daily_2010_adj.parquet 文件
-    parquet_file = os.path.expanduser('~/etf_daily.parquet')
+   
+    # parquet_file = os.path.expanduser('~/etf_daily.parquet')
+    parquet_file = os.path.expanduser('~/wind_daily_2010_adj.parquet')
+    
     print(f'正在读取 {parquet_file}...')
     
     try:
@@ -399,7 +386,7 @@ if __name__ == '__main__':
         # 为每个股票代码创建数据源并添加到 cerebro
         # 限制处理前20只股票，避免数据量过大
         added_count = 0
-        for stock_code in sorted(stock_codes)[:3]:
+        for stock_code in sorted(stock_codes)[:num_stocks]:
             stock_data = raw_data[raw_data[code_col] == stock_code].copy()
             
             # 确保数据按日期排序
@@ -433,7 +420,7 @@ if __name__ == '__main__':
                 continue
             
             # 确保数据量足够（至少需要 momentum_period + 1 条记录）
-            if len(stock_data) < 21:  # 至少需要 20 + 1 条记录用于计算动量
+            if len(stock_data) < 210:  # 至少需要 20 + 1 条记录用于计算动量
                 # print(f'警告: 股票 {stock_code} 数据量不足 ({len(stock_data)} 条)，跳过')
                 continue
             
@@ -469,7 +456,7 @@ if __name__ == '__main__':
         raise
 
     # 添加策略
-    cerebro.addstrategy(SimpleFactorStrategy, top_n_stocks=3) # 只持有表现最好的 3 只
+    cerebro.addstrategy(SimpleFactorStrategy, top_n_stocks=top_n_stocks) # 只持有表现最好的 3 只
 
     # 添加常用的分析器
     # 1. 夏普率 (Sharpe Ratio) - 衡量风险调整后的收益
@@ -541,10 +528,10 @@ if __name__ == '__main__':
     # 2. 夏普率
     sharpe = strat.analyzers.sharpe.get_analysis()
     print('\n【夏普率分析】')
-    # if 'sharperatio' in sharpe:
-    #     print(f'  夏普率: {sharpe["sharperatio"]:.4f}')
-    # else:
-    #     print('  夏普率: 数据不足，无法计算')
+    if 'sharperatio' in sharpe:
+        print(f'  夏普率: {sharpe["sharperatio"]:.4f}')
+    else:
+        print('  夏普率: 数据不足，无法计算')
     
     # 3. 回撤分析
     drawdown = strat.analyzers.drawdown.get_analysis()
@@ -602,3 +589,6 @@ if __name__ == '__main__':
     plot_equity_curve(strat, initial_value, final_value)
     
     # cerebro.plot() # 取消注释可以绘制结果
+
+# if __name__ == '__main__':
+#     main(num_stocks=20, top_n_stocks=3)
