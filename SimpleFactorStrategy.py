@@ -1,8 +1,10 @@
 from __future__ import (absolute_import, division, print_function,
                         unicode_literals)
 
+import random
 import backtrader as bt
 import pandas as pd
+import numpy as np
 from utils import setup_chinese_font
 import matplotlib.pyplot as plt
 from datetime import datetime
@@ -12,14 +14,16 @@ setup_chinese_font()
 
 class SimpleFactorStrategy(bt.Strategy):
     """
-    一个简化的动量与估值双因子选股策略
+    一个简化的动量与股价双因子选股策略
     - 动量：过去20个交易日的回报率
-    - 估值：以当前收盘价的倒数作为代理因子 (越低越好，但我们用倒数让它越高越好)
+    - 价格倒数：以当前收盘价的倒数作为代理因子 (越低越好，但我们用倒数让它越高越好)
+    composite_score = mom_score + (val_score * val_weight) #
     """
     params = (
         ('momentum_period', 20),  # 动量计算周期
-        ('top_n_stocks', 5),      # 每期买入排名前N的股票数量
+        ('top_n_stocks', 10),      # 每期买入排名前N的股票数量
         ('rebalance_period', 'monthly'),  # 换仓周期: 'monthly' (每月) 或 'weekly' (每周)
+        ('val_weight', 100),  # 估值权重
     )
 
     def __init__(self):
@@ -54,6 +58,7 @@ class SimpleFactorStrategy(bt.Strategy):
 
     def next1(self):
         # 记录每日资产价值
+        
         current_date = self.datas[0].datetime.date(0)
         current_value = self.broker.getvalue()
         
@@ -100,7 +105,7 @@ class SimpleFactorStrategy(bt.Strategy):
             mom_ind = self.momentum_indicators[name]
 
             # 确保数据已就绪
-            if len(data) < self.p.momentum_period or mom_ind[0] is None:
+            if len(data) < self.p.momentum_period or mom_ind[0] is None or pd.isna(mom_ind[0]):
                 continue
             
             # 检查价格是否有效（避免除零错误）
@@ -114,7 +119,7 @@ class SimpleFactorStrategy(bt.Strategy):
 
             # 组合因子 (简化为相加)
             # 实际中会进行标准化、加权和回归等复杂处理
-            composite_score = mom_score + (val_score * 100) # 估值权重放大
+            composite_score = mom_score + (val_score * self.p.val_weight) # 估值权重放大
             # print(f'{name} 动量得分: {mom_score}, 估值得分: {val_score}, 综合得分: {composite_score}')
 
             candidates.append({
@@ -188,6 +193,7 @@ class SimpleFactorStrategy(bt.Strategy):
 def plot_equity_curve(strategy, initial_value, final_value):
     """
     绘制收益曲线图，标注最大回撤
+    输出到equity_curve.png
     """
     if not hasattr(strategy, 'portfolio_values') or len(strategy.portfolio_values) == 0:
         print('警告: 没有资产价值数据，无法绘制图表')
@@ -293,220 +299,120 @@ def plot_equity_curve(strategy, initial_value, final_value):
 
 # --- 回测运行部分 ---
 
-def main(num_stocks=100, top_n_stocks=3):
+import os
+import math
 
-    import os
-    
-    cerebro = bt.Cerebro()
-    cerebro.broker.setcash(100000.0)
-    cerebro.broker.setcommission(commission=0.001)
 
-   
-    # parquet_file = os.path.expanduser('~/etf_daily.parquet')
-    parquet_file = os.path.expanduser('~/wind_daily_2010_adj.parquet')
-    
+def load_and_validate_data(parquet_file, code_col, col_open, col_high, col_low, col_close, col_volume):
+    """加载并验证 parquet 数据文件"""
+    parquet_file = os.path.expanduser(parquet_file)
     print(f'正在读取 {parquet_file}...')
     
-    try:
-        raw_data = pd.read_parquet(parquet_file)
-        print(f'成功读取数据，共 {len(raw_data)} 行')
-        print(f'数据列名: {list(raw_data.columns)}')
-        
-        # 字段名映射：支持中英文字段名
-        # 日期字段可能的名称
-        date_cols = ['日期', 'date', 'trade_date', '交易日期', 'datetime']
-        # 股票代码字段可能的名称
-        code_cols = ['股票代码', 'code', 'wind_code', 'ts_code', 'symbol', '股票代码']
-        # OHLCV字段可能的名称（中文和英文）
-        field_mapping = {
-            'open': ['开盘', 'open', 'OPEN'],
-            'high': ['最高', 'high', 'HIGH'],
-            'low': ['最低', 'low', 'LOW'],
-            'close': ['收盘', 'close', 'CLOSE'],
-            'volume': ['成交量', 'volume', 'vol', 'VOL', 'VOLUME']
-        }
-        
-        # 自动检测日期列
-        date_col = None
-        for col in date_cols:
-            if col in raw_data.columns:
-                date_col = col
-                break
-        if date_col is None and isinstance(raw_data.index, pd.DatetimeIndex):
-            # 如果索引已经是日期类型，使用索引
-            date_col = None
-            print('使用索引作为日期')
-        elif date_col is None:
-            # 尝试查找包含date的列
-            for col in raw_data.columns:
-                if 'date' in col.lower() or '日期' in col.lower():
-                    date_col = col
-                    break
-        
-        if date_col:
-            raw_data[date_col] = pd.to_datetime(raw_data[date_col])
-            raw_data.set_index(date_col, inplace=True)
-            print(f'使用 {date_col} 作为日期列')
-        elif not isinstance(raw_data.index, pd.DatetimeIndex):
-            raise ValueError('无法找到日期列，请确保数据包含日期信息')
-        
-        # 自动检测股票代码列
-        code_col = None
-        for col in code_cols:
-            if col in raw_data.columns:
-                code_col = col
-                break
-        if code_col is None:
-            # 尝试查找包含code的列
-            for col in raw_data.columns:
-                if 'code' in col.lower() or '代码' in col.lower():
-                    code_col = col
-                    break
-        
-        if code_col is None:
-            raise ValueError('无法找到股票代码列')
-        print(f'使用 {code_col} 作为股票代码列')
-        
-        # 自动检测OHLCV列
-        detected_fields = {}
-        for field, possible_names in field_mapping.items():
-            for name in possible_names:
-                if name in raw_data.columns:
-                    detected_fields[field] = name
-                    break
-            if field not in detected_fields:
-                raise ValueError(f'无法找到 {field} 字段，尝试过的名称: {possible_names}')
-        
-        print(f'字段映射: {detected_fields}')
-        
-        # 按股票代码分组
-        stock_codes = raw_data[code_col].unique()
-        print(f'找到 {len(stock_codes)} 只股票')
-        
-        # 为每个股票代码创建数据源并添加到 cerebro
-        # 限制处理前20只股票，避免数据量过大
-        added_count = 0
-        for stock_code in sorted(stock_codes)[:num_stocks]:
-            stock_data = raw_data[raw_data[code_col] == stock_code].copy()
-            
-            # 确保数据按日期排序
-            stock_data.sort_index(inplace=True)
-            
-            # 移除股票代码列（不再需要）
-            stock_data = stock_data.drop(columns=[code_col])
-            
-            # 检查数据是否为空
-            if len(stock_data) == 0:
-                print(f'警告: 股票 {stock_code} 没有数据，跳过')
-                continue
-            
-            # 数据清理：过滤掉价格为 0、NaN 或无效的数据
-            # 检查 OHLC 列是否有效
-            ohlc_cols = [detected_fields['open'], detected_fields['high'], 
-                        detected_fields['low'], detected_fields['close']]
-            for col in ohlc_cols:
-                if col in stock_data.columns:
-                    # 过滤掉价格为 0、NaN、负数或无穷大的行
-                    stock_data = stock_data[
-                        (stock_data[col] > 0) & 
-                        (stock_data[col].notna()) &
-                        (stock_data[col] != float('inf')) &
-                        (stock_data[col] != float('-inf'))
-                    ]
-            
-            # 再次检查数据是否为空（清理后）
-            if len(stock_data) == 0:
-                # print(f'警告: 股票 {stock_code} 清理后没有有效数据，跳过')
-                continue
-            
-            # 确保数据量足够（至少需要 momentum_period + 1 条记录）
-            if len(stock_data) < 210:  # 至少需要 20 + 1 条记录用于计算动量
-                # print(f'警告: 股票 {stock_code} 数据量不足 ({len(stock_data)} 条)，跳过')
-                continue
-            
-            # 创建 PandasData feed，使用检测到的字段名
-            data_feed = bt.feeds.PandasData(
-                dataname=stock_data,
-                # 告诉 backtrader 你的 DataFrame 中对应 OHLCV 的列名
-                fromdate=datetime(2020, 1, 1),
-                todate=datetime(2025, 12, 31),
-                open=detected_fields['open'],
-                high=detected_fields['high'],
-                low=detected_fields['low'],
-                close=detected_fields['close'],
-                volume=detected_fields['volume'],
-                name=str(stock_code)  # 设置数据源名称
-            )
-            
-            # 添加到 cerebro
-            cerebro.adddata(data_feed)
-            added_count += 1
-            print(f'已添加股票 {stock_code}，共 {len(stock_data)} 条记录')
-        
-        print(f'总共添加了 {added_count} 个数据源到 cerebro')
-        
-    except FileNotFoundError:
-        print(f'错误: 找不到文件 {parquet_file}')
-        print('请确保 history.parquet 文件在当前目录或提供正确的路径')
-        raise
-    except Exception as e:
-        print(f'读取数据时出错: {e}')
-        import traceback
-        traceback.print_exc()
-        raise
+    raw_data = pd.read_parquet(parquet_file)
+    print(f'成功读取数据，共 {len(raw_data)} 行')
+    print(f'数据列名: {list(raw_data.columns)}')
 
-    # 添加策略
-    cerebro.addstrategy(SimpleFactorStrategy, top_n_stocks=top_n_stocks) # 只持有表现最好的 3 只
+    # 验证股票代码列
+    if code_col not in raw_data.columns:
+        raise ValueError(f'无法找到股票代码列 {code_col}')
+    print(f'使用 {code_col} 作为股票代码列')
+    
+    # 验证OHLCV列
+    ohlcv_cols = {
+        'open': col_open,
+        'high': col_high,
+        'low': col_low,
+        'close': col_close,
+        'volume': col_volume
+    }
+    for field, col_name in ohlcv_cols.items():
+        if col_name not in raw_data.columns:
+            raise ValueError(f'无法找到 {field} 字段: {col_name}')
+    
+    print(f'OHLCV列: open={col_open}, high={col_high}, low={col_low}, close={col_close}, volume={col_volume}')
+    
+    return raw_data
 
-    # 添加常用的分析器
-    # 1. 夏普率 (Sharpe Ratio) - 衡量风险调整后的收益
+
+def add_data_feeds(cerebro, raw_data, code_col, col_open, col_high, col_low, col_close, col_volume,
+                   num_stocks, min_data_length, fromdate, todate):
+    """添加股票数据源到 cerebro"""
+    ohlc_cols = [col_open, col_high, col_low, col_close]
+    grouped = raw_data.groupby(code_col)
+    print(f'找到 {len(grouped)} 只股票')
+    
+    # 筛选在 fromdate 之前已上市的股票（有数据的）
+    all_codes = list(grouped.groups.keys())
+    eligible_codes = []
+    for code in all_codes:
+        df = grouped.get_group(code)
+        if not np.isnan(df.iloc[0][col_close]):
+            eligible_codes.append(code)
+    
+    print(f'在 {fromdate.date()} 之前已上市的股票: {len(eligible_codes)} 只')
+    
+    stock_codes_sample = random.sample(eligible_codes, min(num_stocks, len(eligible_codes)))
+    
+    added_count = 0
+    for stock_code in stock_codes_sample:
+        stock_data = grouped.get_group(stock_code).copy()
+        
+        # 确保数据按日期排序，移除股票代码列
+        stock_data = stock_data.sort_index().drop(columns=[code_col])
+        
+        # 数据清理：过滤掉价格为 0、NaN 或无效的数据
+        valid_mask = pd.Series(True, index=stock_data.index)
+        for col in ohlc_cols:
+            valid_mask &= (stock_data[col] > 0) & stock_data[col].notna() & (stock_data[col] != float('inf'))
+        stock_data = stock_data[valid_mask]
+        
+        # 确保数据量足够
+        if len(stock_data) < min_data_length:
+            continue
+        
+        # 创建 PandasData feed
+        data_feed = bt.feeds.PandasData(
+            dataname=stock_data,
+            fromdate=fromdate,
+            todate=todate,
+            open=col_open,
+            high=col_high,
+            low=col_low,
+            close=col_close,
+            volume=col_volume,
+            name=str(stock_code)
+        )
+        
+        cerebro.adddata(data_feed)
+        added_count += 1
+        print(f'已添加股票 {stock_code}，共 {len(stock_data)} 条记录')
+    
+    print(f'总共添加了 {added_count} 个数据源到 cerebro')
+    return added_count
+
+
+def add_analyzers(cerebro):
+    """添加分析器到 cerebro"""
     cerebro.addanalyzer(bt.analyzers.SharpeRatio, _name='sharpe',
                         timeframe=bt.TimeFrame.Days, annualize=True)
-    
-    # 2. 回撤分析 (DrawDown) - 最大回撤和回撤持续时间
     cerebro.addanalyzer(bt.analyzers.DrawDown, _name='drawdown')
-    
-    # 3. 交易分析 (TradeAnalyzer) - 交易统计信息
     cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name='trades')
-    
-    # 4. 收益率分析 (Returns) - 总收益率和年化收益率
     cerebro.addanalyzer(bt.analyzers.Returns, _name='returns',
-                       timeframe=bt.TimeFrame.Days)
-    
-    # 5. 年化收益率 (AnnualReturn) - 每年的收益率
+                        timeframe=bt.TimeFrame.Days)
     cerebro.addanalyzer(bt.analyzers.AnnualReturn, _name='annualreturn')
-    
-    # 6. 系统质量指标 (SQN) - 评估交易系统质量
     cerebro.addanalyzer(bt.analyzers.SQN, _name='sqn')
-    
-    # 7. 卡玛比率 (Calmar) - 年化收益率与最大回撤的比率
     cerebro.addanalyzer(bt.analyzers.Calmar, _name='calmar',
                         timeframe=bt.TimeFrame.Days)
-    
-    # 8. 时间收益率 (TimeReturn) - 按时间框架的收益率
     cerebro.addanalyzer(bt.analyzers.TimeReturn, _name='timereturn',
-                       timeframe=bt.TimeFrame.Months)
+                        timeframe=bt.TimeFrame.Months)
 
-    print('=' * 60)
-    print('Starting Portfolio Value: %.2f' % cerebro.broker.getvalue())
-    print('=' * 60)
-    
-    # 运行回测
-    results = cerebro.run()
-    strat = results[0]
-    
-    print('=' * 60)
-    print('Final Portfolio Value: %.2f' % cerebro.broker.getvalue())
-    print('=' * 60)
-    
-    # 打印分析结果
+
+def print_analysis_report(strat, initial_value, final_value):
+    """打印策略分析报告"""
     print('\n' + '=' * 60)
     print('策略分析报告')
     print('=' * 60)
     
-    # 计算实际的初始和最终资产价值
-    initial_value = cerebro.broker.startingcash
-    final_value = cerebro.broker.getvalue()
     total_return_pct = (final_value - initial_value) / initial_value * 100
     
     # 1. 收益率分析
@@ -516,8 +422,6 @@ def main(num_stocks=100, top_n_stocks=3):
     print(f'  最终资产: {final_value:,.2f}')
     print(f'  总收益率: {total_return_pct:.2f}%')
     print(f'  总收益倍数: {final_value / initial_value:.2f}x')
-    # rtot是对数收益率，转换为百分比收益率: (e^rtot - 1) * 100%
-    import math
     rtot_log = returns.get("rtot", 0)
     if rtot_log != float('-inf'):
         rtot_pct = (math.exp(rtot_log) - 1) * 100
@@ -536,7 +440,7 @@ def main(num_stocks=100, top_n_stocks=3):
     # 3. 回撤分析
     drawdown = strat.analyzers.drawdown.get_analysis()
     print('\n【回撤分析】')
-    print(f'  最大回撤: {drawdown.get("max", {}).get("drawdown", 0) * 100:.2f}%')
+    print(f'  最大回撤: {drawdown.get("max", {}).get("drawdown", 0):.2f}%')
     print(f'  最大回撤金额: {drawdown.get("max", {}).get("moneydown", 0):.2f}')
     print(f'  最大回撤长度: {drawdown.get("max", {}).get("len", 0)} 天')
     
@@ -584,11 +488,108 @@ def main(num_stocks=100, top_n_stocks=3):
     print('分析报告结束')
     print('=' * 60)
 
-    # 绘制收益曲线和回撤图
+
+def main(
+    # ===== 数据配置 =====
+    parquet_file='~/wind_daily_2010_adj.parquet',
+    num_stocks=100,
+    min_data_length=210,
+    fromdate=datetime(2020, 1, 1),
+    todate=datetime(2025, 12, 31),
+    # ===== 数据列名配置 =====
+    code_col='CODE',
+    col_open='OPEN',
+    col_high='HIGH',
+    col_low='LOW',
+    col_close='CLOSE',
+    col_volume='VOLUME',
+    # ===== 策略参数 =====
+    top_n_stocks=3,
+    momentum_period=20,
+    val_weight=100,
+    rebalance_period='monthly',
+    # ===== 资金配置 =====
+    initial_cash=100000.0,
+    commission=0.001,
+):
+    """回测主函数"""
+    # 初始化 cerebro
+    cerebro = bt.Cerebro()
+    cerebro.broker.setcash(initial_cash)
+    cerebro.broker.setcommission(commission=commission)
+    
+    # 加载数据
+    try:
+        raw_data = load_and_validate_data(
+            parquet_file, code_col, col_open, col_high, col_low, col_close, col_volume
+        )
+        
+        # 添加数据源
+        add_data_feeds(
+            cerebro, raw_data, code_col, col_open, col_high, col_low, col_close, col_volume,
+            num_stocks, min_data_length, fromdate, todate
+        )
+    except FileNotFoundError:
+        print(f'错误: 找不到文件 {parquet_file}')
+        raise
+    except Exception as e:
+        print(f'读取数据时出错: {e}')
+        import traceback
+        traceback.print_exc()
+        raise
+
+    # 添加策略
+    cerebro.addstrategy(
+        SimpleFactorStrategy,
+        top_n_stocks=top_n_stocks,
+        momentum_period=momentum_period,
+        val_weight=val_weight,
+        rebalance_period=rebalance_period
+    )
+
+    # 添加分析器
+    add_analyzers(cerebro)
+
+    # 运行回测
+    print('=' * 60)
+    print('Starting Portfolio Value: %.2f' % cerebro.broker.getvalue())
+    print('=' * 60)
+    
+    results = cerebro.run()
+    strat = results[0]
+    
+    print('=' * 60)
+    print('Final Portfolio Value: %.2f' % cerebro.broker.getvalue())
+    print('=' * 60)
+    
+    # 打印分析报告
+    initial_value = cerebro.broker.startingcash
+    final_value = cerebro.broker.getvalue()
+    print_analysis_report(strat, initial_value, final_value)
+
+    # 绘制收益曲线
     print('\n正在生成收益曲线图...')
     plot_equity_curve(strat, initial_value, final_value)
-    
-    # cerebro.plot() # 取消注释可以绘制结果
 
-# if __name__ == '__main__':
-#     main(num_stocks=20, top_n_stocks=3)
+if __name__ == '__main__':
+    
+    main(
+        # 数据配置
+        # parquet_file='~/wind_daily_2010_adj.parquet',
+        parquet_file='~/etf_daily.parquet',
+        num_stocks=200,
+        min_data_length=210,
+        fromdate=datetime(2020, 2, 1),
+        todate=datetime(2025, 12, 31),
+        # 数据列名配置
+        
+        # 策略参数
+        top_n_stocks=5,
+        momentum_period=22,
+        val_weight=0,
+        rebalance_period='weekly',
+        # 资金配置
+        initial_cash=100000.0,
+        commission=0.0003,
+    )
+

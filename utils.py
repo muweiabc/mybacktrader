@@ -1,5 +1,6 @@
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
+from matplotlib import font_manager
 from datetime import datetime
 import platform
 
@@ -34,3 +35,4 @@ def setup_chinese_font():
             plt.rcParams['font.sans-serif'] = ['Arial Unicode MS'] + plt.rcParams['font.sans-serif']
     
     plt.rcParams['axes.unicode_minus'] = False  # 解决负号显示问题
+    font_manager._log.setLevel(40)
