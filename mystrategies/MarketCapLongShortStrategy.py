@@ -17,12 +17,17 @@ from __future__ import (absolute_import, division, print_function,
                         unicode_literals)
 
 import backtrader as bt
+import argparse
 import pandas as pd
 import numpy as np
 from utils import setup_chinese_font
 import matplotlib.pyplot as plt
 from datetime import datetime
 import matplotlib.dates as mdates
+try:
+    from mystrategies.config_loader import load_config, get_repo_root, resolve_path
+except ImportError:
+    from config_loader import load_config, get_repo_root, resolve_path
 
 # 初始化中文字体
 setup_chinese_font()
@@ -309,27 +314,42 @@ def plot_equity_curve(strategy, initial_value, final_value, output_file='graphs/
     plt.close()  # 关闭图表，不显示
 
 
-def main(top_amt_stocks=300, num_groups=10, long_group=10, short_group=1):
+def main(config: dict):
     """
     运行市值分组多空策略回测
-    
-    参数:
-    - top_amt_stocks: top_amt_stocks
-    - num_groups: 分组数量（默认10组）
-    - long_group: 做多的组号（默认10，最小市值组）
-    - short_group: 做空的组号（默认1，最大市值组）
     """
-    import os
-    
+    config = dict(config)
+    parquet_file = resolve_path(config["parquet_file"], base_dir=get_repo_root())
+    config["parquet_file"] = parquet_file
+    top_amt_stocks = config.get("top_amt_stocks", 1000)
+    num_groups = config.get("num_groups", 10)
+    long_group = config.get("long_group", 10)
+    short_group = config.get("short_group", 1)
+    lookback_days = config.get("lookback_days", 20)
+    rebalance_period = config.get("rebalance_period", "monthly")
+    long_weight = config.get("long_weight", 0.5)
+    short_weight = config.get("short_weight", 0.5)
+    initial_cash = config.get("initial_cash", 1_000_000.0)
+    commission = config.get("commission", 0.001)
+    fromdate = config.get("fromdate", datetime(2020, 1, 1))
+    todate = config.get("todate", datetime(2025, 12, 31))
+    code_col = config.get("code_col", "CODE")
+    amt_col = config.get("amt_col", "AMT")
+    col_open = config.get("col_open", "OPEN")
+    col_high = config.get("col_high", "HIGH")
+    col_low = config.get("col_low", "LOW")
+    col_close = config.get("col_close", "CLOSE")
+    col_volume = config.get("col_volume", "VOLUME")
+    allow_short = config.get("allow_short", True)
+
     cerebro = bt.Cerebro()
-    cerebro.broker.setcash(1000000.0)  # 初始资金100万
-    cerebro.broker.setcommission(commission=0.001)
+    cerebro.broker.setcash(initial_cash)
+    cerebro.broker.setcommission(commission=commission)
     
     # 允许做空
-    cerebro.broker.set_shortcash(True)
+    cerebro.broker.set_shortcash(allow_short)
     
     # 读取数据
-    parquet_file = os.path.expanduser('~/wind_daily_2010_adj.parquet')
     print(f'正在读取 {parquet_file}...')
     
     try:
@@ -350,11 +370,9 @@ def main(top_amt_stocks=300, num_groups=10, long_group=10, short_group=1):
             raw_data[date_col] = pd.to_datetime(raw_data[date_col])
             raw_data.set_index(date_col, inplace=True)
         
-        code_col = 'CODE'
-        
         # 过滤最近5年的数据 (2020-2025)
-        start_date = datetime(2020, 1, 1)
-        end_date = datetime(2025, 12, 31)
+        start_date = fromdate
+        end_date = todate
         
         # 筛选在回测开始日期前就有数据的股票
         # 计算每只股票的第一条数据日期
@@ -369,7 +387,7 @@ def main(top_amt_stocks=300, num_groups=10, long_group=10, short_group=1):
         recent_data = recent_data[recent_data[code_col].isin(valid_stocks)]
         
         # 计算每只股票的平均成交额
-        avg_amt_by_stock = recent_data.groupby(code_col)['AMT'].mean().sort_values(ascending=False)
+        avg_amt_by_stock = recent_data.groupby(code_col)[amt_col].mean().sort_values(ascending=False)
         
         # 选择平均成交额最高的股票（确保有足够流动性）
         selected_stocks = avg_amt_by_stock.head(top_amt_stocks).index.tolist()
@@ -379,7 +397,7 @@ def main(top_amt_stocks=300, num_groups=10, long_group=10, short_group=1):
         added_count = 0
         # 先筛选出selected_stocks的数据，再groupby，避免多次全表扫描
         selected_raw_data = raw_data[raw_data[code_col].isin(selected_stocks)]
-        ohlc_cols = ['OPEN', 'HIGH', 'LOW', 'CLOSE']
+        ohlc_cols = [col_open, col_high, col_low, col_close]
         
         for stock_code, stock_data in selected_raw_data.groupby(code_col):
             stock_data = stock_data.copy()
@@ -405,11 +423,11 @@ def main(top_amt_stocks=300, num_groups=10, long_group=10, short_group=1):
                 dataname=stock_data,
                 fromdate=start_date,
                 todate=end_date,
-                open='OPEN',
-                high='HIGH',
-                low='LOW',
-                close='CLOSE',
-                volume='VOLUME',
+                open=col_open,
+                high=col_high,
+                low=col_low,
+                close=col_close,
+                volume=col_volume,
                 name=str(stock_code)
             )
             
@@ -429,7 +447,11 @@ def main(top_amt_stocks=300, num_groups=10, long_group=10, short_group=1):
         MarketCapLongShortStrategy, 
         num_groups=num_groups,
         long_group=long_group,
-        short_group=short_group
+        short_group=short_group,
+        lookback_days=lookback_days,
+        rebalance_period=rebalance_period,
+        long_weight=long_weight,
+        short_weight=short_weight,
     )
     
     # 允许策略在所有数据对齐前就开始运行
@@ -548,11 +570,15 @@ def main(top_amt_stocks=300, num_groups=10, long_group=10, short_group=1):
 
 
 if __name__ == '__main__':
-    # 运行回测
-    # 参数说明:
-    # - num_stocks: 选择200只股票进行回测
-    # - num_groups: 分成10组
-    # - long_group: 做多第10组(最小市值)
-    # - short_group: 做空第1组(最大市值)
-    main(top_amt_stocks=1000, num_groups=10, long_group=10, short_group=1)
+    parser = argparse.ArgumentParser(description="MarketCapLongShortStrategy backtest runner")
+    parser.add_argument(
+        "--config",
+        default=None,
+        help="Path to JSON/YAML config (default: configs/market_cap_strategy.json)",
+    )
+    args = parser.parse_args()
+    default_config = get_repo_root() / "configs" / "market_cap_strategy.json"
+    config_path = args.config or str(default_config)
+    config = load_config(config_path)
+    main(config)
 

@@ -1,0 +1,17 @@
+{
+  "strategy": "SmallCapMomentumStrategy",
+  "parquet_path": "~/wind_daily_2010_adj.parquet",
+  "mktcap_path": "~/wind_mktcap.csv",
+  "backtest_start": "2015-01-01 00:00:00",
+  "backtest_end": "2019-12-31 00:00:00",
+  "max_stocks": 1500,
+  "initial_cash": 1000000,
+  "commission": 0.0003,
+  "strategy_params": {
+    "lookback": 60,
+    "ma_period": 120,
+    "rebalance_months": 1,
+    "smallcap_pct": 0.3,
+    "hold_num": 10
+  }
+}

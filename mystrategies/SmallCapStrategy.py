@@ -1,4 +1,5 @@
 import backtrader as bt
+import argparse
 import pandas as pd
 import os
 from datetime import datetime
@@ -7,6 +8,10 @@ import logging
 import matplotlib.pyplot as plt
 from backtrader import strategy
 from utils import setup_chinese_font
+try:
+    from mystrategies.config_loader import load_config, get_repo_root, resolve_path
+except ImportError:
+    from config_loader import load_config, get_repo_root, resolve_path
 
 setup_chinese_font()
 
@@ -121,7 +126,8 @@ class SmallCapMomentumStrategy(bt.Strategy):
                 self.order_target_size(d, size)
                 logging.debug(f'{dt},买入 {d._name} {size} 股,价格 {price:.2f}')
 
-def load_parquet_data(parquet_path, max_stocks=None, backtest_start=None, backtest_end=None):
+def load_parquet_data(parquet_path, max_stocks=None, backtest_start=None, backtest_end=None,
+                      mktcap_path="~/wind_mktcap.csv"):
     """
     从 parquet 文件加载股票数据
     
@@ -134,7 +140,7 @@ def load_parquet_data(parquet_path, max_stocks=None, backtest_start=None, backte
     Returns:
         data_feeds: 包含每只股票数据的列表
     """
-    df_mktcap = pd.read_csv('~/wind_mktcap.csv',index_col=0)
+    df_mktcap = pd.read_csv(os.path.expanduser(mktcap_path), index_col=0)
     df_mktcap.sort_values(by='MKT_FREESHARES', ascending=True, inplace=True)
     smallcap_codelist = df_mktcap.head(max_stocks).index.values
 
@@ -237,27 +243,33 @@ def load_parquet_data(parquet_path, max_stocks=None, backtest_start=None, backte
     return data_feeds, 'free_mktcap' in col_mapping
 
 
-if __name__ == '__main__':
-    cerebro = bt.Cerebro()
-    cerebro.addstrategy(SmallCapMomentumStrategy)
+def main(config: dict):
+    config = dict(config)
+    parquet_path = resolve_path(config["parquet_path"], base_dir=get_repo_root())
+    config["parquet_path"] = parquet_path
+    backtest_start = config.get("backtest_start", datetime(2015, 1, 1))
+    backtest_end = config.get("backtest_end", datetime(2019, 12, 31))
+    max_stocks = config.get("max_stocks", 1500)
+    mktcap_path = resolve_path(config.get("mktcap_path", "~/wind_mktcap.csv"), base_dir=get_repo_root())
+    initial_cash = config.get("initial_cash", 1_000_000)
+    commission = config.get("commission", 0.0003)
+    strategy_params = config.get("strategy_params", {})
 
-    # 加载 parquet 数据
-    parquet_path = '~/wind_daily_2010_adj.parquet'
-    backtest_start = datetime(2015, 1, 1)
-    backtest_end = datetime(2019, 12, 31)
-    
+    cerebro = bt.Cerebro()
+    cerebro.addstrategy(SmallCapMomentumStrategy, **strategy_params)
+
     data_feeds, has_mktcap = load_parquet_data(
         parquet_path,
-        max_stocks=1500,  # 可调整，None 表示加载全部
+        max_stocks=max_stocks,
         backtest_start=backtest_start,
-        backtest_end=backtest_end
+        backtest_end=backtest_end,
+        mktcap_path=mktcap_path,
     )
-    
+
     if not has_mktcap:
         print('\n警告: 数据中没有流通市值字段，策略将使用收盘价作为替代排序依据')
-    
+
     for feed in data_feeds:
-        # 根据是否有流通市值选择数据类
         if has_mktcap and 'free_mktcap' in feed['data'].columns:
             data = ASharePandasData(
                 dataname=feed['data'],
@@ -273,16 +285,15 @@ if __name__ == '__main__':
             )
         cerebro.adddata(data, name=feed['name'])
 
-    cerebro.broker.setcash(1_000_000)
-    cerebro.broker.setcommission(commission=0.0003, stocklike=True)
+    cerebro.broker.setcash(initial_cash)
+    cerebro.broker.setcommission(commission=commission, stocklike=True)
 
     print(f'\n开始回测: {backtest_start.date()} 到 {backtest_end.date()}')
     print('Start Value:', cerebro.broker.getvalue())
     results = cerebro.run()
     print('Final Value:', cerebro.broker.getvalue())
-    
-    # 计算收益率
-    initial = 1_000_000
+
+    initial = initial_cash
     final = cerebro.broker.getvalue()
     total_return = (final - initial) / initial * 100
     print(f'总收益率: {total_return:.2f}%')
@@ -292,3 +303,17 @@ if __name__ == '__main__':
     values = strategy.portfolio_values
     plt.plot(dates, values)
     plt.show()
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description="SmallCapMomentumStrategy backtest runner")
+    parser.add_argument(
+        "--config",
+        default=None,
+        help="Path to JSON/YAML config (default: configs/small_cap_strategy.json)",
+    )
+    args = parser.parse_args()
+    default_config = get_repo_root() / "configs" / "small_cap_strategy.json"
+    config_path = args.config or str(default_config)
+    config = load_config(config_path)
+    main(config)

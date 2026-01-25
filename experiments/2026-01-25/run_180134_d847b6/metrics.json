@@ -1,0 +1,13 @@
+{
+  "run_id": "run_180134_d847b6",
+  "strategy": "MomAmtStrtg",
+  "initial_value": 100000.0,
+  "final_value": 343171.35397418257,
+  "total_return_pct": 243.17135397418258,
+  "sharpe": 1.6717086907045489,
+  "max_drawdown": 18.173094050859955,
+  "calmar": null,
+  "total_trades": 726,
+  "rtot": 1.2330597107009222,
+  "rnorm": 0.24442140581861238
+}

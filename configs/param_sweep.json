@@ -1,0 +1,21 @@
+{
+  "data": {
+    "file_path": "~/etf_daily.parquet",
+    "backtest_start": "2020-02-01 00:00:00",
+    "backtest_end": "2025-12-31 00:00:00"
+  },
+  "sweep": {
+    "two_d": false,
+    "top_n_values": [1, 5],
+    "max_stocks": null,
+    "max_stocks_values": []
+  },
+  "backtest": {
+    "initial_cash": 100000.0,
+    "commission": 0.001
+  },
+  "plot": {
+    "plot_curves": true,
+    "save_dir": "param_sweep_curves"
+  }
+}

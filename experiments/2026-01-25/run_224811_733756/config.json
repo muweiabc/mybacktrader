@@ -1,0 +1,23 @@
+{
+  "strategy": "MomAmtStrtg",
+  "parquet_file": "../data/wind_daily_2010_adj.parquet",
+  "num_stocks": 100,
+  "min_data_length": 210,
+  "fromdate": "2020-02-01 00:00:00",
+  "todate": "2025-12-31 00:00:00",
+  "code_col": "CODE",
+  "col_open": "OPEN",
+  "col_high": "HIGH",
+  "col_low": "LOW",
+  "col_close": "CLOSE",
+  "col_volume": "VOLUME",
+  "col_amt": "AMT",
+  "top_n_stocks": 5,
+  "momentum_period": 22,
+  "amt_weight": 100,
+  "amt_norm_method": "zscore",
+  "rebalance_period": "weekly",
+  "initial_cash": 100000.0,
+  "commission": 0.0003,
+  "code_commit_hash": "304dc336ed5ed3298032ddf15a47824a5c2bdc3d"
+}

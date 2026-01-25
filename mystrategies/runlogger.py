@@ -1,4 +1,4 @@
-import os, json, hashlib, datetime
+import os, json, hashlib, datetime, subprocess
 from pathlib import Path
 import pandas as pd
 
@@ -8,6 +8,20 @@ def _now_str():
 def _short_hash(obj) -> str:
     s = json.dumps(obj, sort_keys=True, ensure_ascii=False, default=str)
     return hashlib.md5(s.encode("utf-8")).hexdigest()[:6]
+
+def _git_commit_hash() -> str | None:
+    try:
+        repo_root = Path(__file__).resolve().parents[1]
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return result.stdout.strip() or None
+    except Exception:
+        return None
 
 class RunLogger:
     def __init__(self, root_dir="experiments", index_file="experiments/index.csv"):
@@ -28,7 +42,9 @@ class RunLogger:
         self.run_id = run_id
         self.run_time = now.strftime("%Y-%m-%d %H:%M:%S")
 
-        self.save_json("config.json", config)
+        config_to_save = dict(config)
+        config_to_save["code_commit_hash"] = _git_commit_hash()
+        self.save_json("config.json", config_to_save)
         return run_id, run_dir
 
     def save_json(self, name: str, obj: dict):

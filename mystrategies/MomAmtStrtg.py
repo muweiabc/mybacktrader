@@ -2,6 +2,7 @@ from __future__ import (absolute_import, division, print_function,
                         unicode_literals)
 
 import random
+import argparse
 import backtrader as bt
 import pandas as pd
 import numpy as np
@@ -11,6 +12,10 @@ from datetime import datetime
 import matplotlib.dates as mdates
 from pathlib import Path
 from runlogger import RunLogger, build_dashboard
+try:
+    from mystrategies.config_loader import load_config, get_repo_root, resolve_path
+except ImportError:
+    from config_loader import load_config, get_repo_root, resolve_path
 # 初始化中文字体
 setup_chinese_font()
 
@@ -33,6 +38,7 @@ class MomAmtStrtg(bt.Strategy):
         ('top_n_stocks', 10),      # 每期买入排名前N的股票数量
         ('rebalance_period', 'monthly'),  # 换仓周期: 'monthly' (每月) 或 'weekly' (每周)
         ('amt_weight', 100),  # 估值权重
+        ('amt_norm_method', 'zscore'),  # 市值归一化: 'zscore' 或 'minmax'
     )
 
     def __init__(self):
@@ -140,13 +146,14 @@ class MomAmtStrtg(bt.Strategy):
         if not candidates:
             return
 
-        # 市值得分归一化（Z-Score），避免过小影响综合得分
-        amt_mean = float(np.mean(amt_scores)) if amt_scores else 0.0
-        amt_std = float(np.std(amt_scores, ddof=0)) if amt_scores else 0.0
-        denom = amt_std if amt_std > 0 else 1.0
+        # 市值得分归一化（避免过小影响综合得分）
+        norm_method = (self.p.amt_norm_method or "zscore").lower()
+        if norm_method == "minmax":
+            norm_scores = self._normalize_amt_minmax(amt_scores)
+        else:
+            norm_scores = self._normalize_amt_zscore(amt_scores)
 
-        for stock in candidates:
-            norm_amt_score = (stock['amt_score'] - amt_mean) / denom
+        for stock, norm_amt_score in zip(candidates, norm_scores):
             stock['amt_score'] = norm_amt_score
             stock['score'] = stock['mom'] + (norm_amt_score * self.p.amt_weight)
             print(f"{stock['name']} 动量得分: {stock['mom']}, 市值得分: {norm_amt_score}, 综合得分: {stock['score']}")
@@ -199,6 +206,24 @@ class MomAmtStrtg(bt.Strategy):
         """
         dt = dt or self.datas[0].datetime.date(0)
         print('%s, %s' % (dt.isoformat(), txt))
+
+    def _normalize_amt_minmax(self, scores):
+        if not scores:
+            return []
+        min_v = float(np.min(scores))
+        max_v = float(np.max(scores))
+        denom = max_v - min_v
+        if denom <= 0:
+            return [0.0 for _ in scores]
+        return [(s - min_v) / denom for s in scores]
+
+    def _normalize_amt_zscore(self, scores):
+        if not scores:
+            return []
+        mean_v = float(np.mean(scores))
+        std_v = float(np.std(scores, ddof=0))
+        denom = std_v if std_v > 0 else 1.0
+        return [(s - mean_v) / denom for s in scores]
 
     def notify_order(self, order):
         """
@@ -576,52 +601,34 @@ def print_analysis_report(strat, initial_value, final_value):
     print('=' * 60)
 
 
-def main(
-    # ===== 数据配置 =====
-    parquet_file,
-    num_stocks=100,
-    min_data_length=210,
-    fromdate=datetime(2020, 1, 1),
-    todate=datetime(2025, 12, 31),
-    # ===== 数据列名配置 =====
-    code_col='CODE',
-    col_open='OPEN',
-    col_high='HIGH',
-    col_low='LOW',
-    col_close='CLOSE',
-    col_volume='VOLUME',
-    col_amt='AMT',
-    # ===== 策略参数 =====
-    top_n_stocks=3,
-    momentum_period=20,
-    amt_weight=100,
-    rebalance_period='monthly',
-    # ===== 资金配置 =====
-    initial_cash=100000.0,
-    commission=0.001,):
+def main(config: dict):
     """
     回测主函数
 
     Args:
-        parquet_file: parquet 文件路径
-        num_stocks: 随机抽样股票数量
-        min_data_length: 最小数据长度（过滤不足样本）
-        fromdate: 回测起始日期
-        todate: 回测结束日期
-        code_col: 股票代码列名
-        col_open: 开盘价列名
-        col_high: 最高价列名
-        col_low: 最低价列名
-        col_close: 收盘价列名
-        col_volume: 成交量列名
-        col_amt: 成交额列名
-        top_n_stocks: 每期买入股票数量
-        momentum_period: 动量计算周期
-        amt_weight: 成交量代表的市值的权重
-        rebalance_period: 换仓周期（monthly/weekly）
-        initial_cash: 初始资金
-        commission: 手续费率
+        config: 配置字典（来自 JSON/YAML）
     """
+    config = dict(config)
+    parquet_file = resolve_path(config["parquet_file"], base_dir=get_repo_root())
+    config["parquet_file"] = parquet_file
+    num_stocks = config.get("num_stocks", 100)
+    min_data_length = config.get("min_data_length", 210)
+    fromdate = config.get("fromdate", datetime(2020, 1, 1))
+    todate = config.get("todate", datetime(2025, 12, 31))
+    code_col = config.get("code_col", "CODE")
+    col_open = config.get("col_open", "OPEN")
+    col_high = config.get("col_high", "HIGH")
+    col_low = config.get("col_low", "LOW")
+    col_close = config.get("col_close", "CLOSE")
+    col_volume = config.get("col_volume", "VOLUME")
+    col_amt = config.get("col_amt", "AMT")
+    top_n_stocks = config.get("top_n_stocks", 3)
+    momentum_period = config.get("momentum_period", 20)
+    amt_weight = config.get("amt_weight", 100)
+    amt_norm_method = config.get("amt_norm_method", "zscore")
+    rebalance_period = config.get("rebalance_period", "monthly")
+    initial_cash = config.get("initial_cash", 100000.0)
+    commission = config.get("commission", 0.001)
     # ===== 运行配置与日志 =====
     config = {
         "strategy": "MomAmtStrtg",
@@ -640,6 +647,7 @@ def main(
         "top_n_stocks": top_n_stocks,
         "momentum_period": momentum_period,
         "amt_weight": amt_weight,
+        "amt_norm_method": amt_norm_method,
         "rebalance_period": rebalance_period,
         "initial_cash": initial_cash,
         "commission": commission,
@@ -679,6 +687,7 @@ def main(
         top_n_stocks=top_n_stocks,
         momentum_period=momentum_period,
         amt_weight=amt_weight,
+        amt_norm_method=amt_norm_method,
         rebalance_period=rebalance_period
     )
 
@@ -743,9 +752,13 @@ def main(
 
     # 生成单次运行HTML
     run_index = Path(run_dir) / "index.html"
-    run_template = Path("templates/experiment_run.html")
+    run_template = Path("dashboard/experiment_run.html")
     if run_template.exists():
-        run_html = run_template.read_text(encoding="utf-8").format(run_id=run_id)
+        run_html = run_template.read_text(encoding="utf-8").format(
+            run_id=run_id,
+            strategy="MomAmtStrtg",
+            run_time=logger.run_time or ""
+        )
     else:
         run_html = f"<h1>Run {run_id}</h1>"
     run_index.write_text(run_html, encoding="utf-8")
@@ -754,6 +767,7 @@ def main(
     logger.append_index_row({
         "run_id": run_id,
         "date": datetime.now().strftime("%Y-%m-%d"),
+        "run_time": logger.run_time,
         "strategy": "MomAmtStrtg",
         "total_return_pct": total_return_pct,
         "sharpe": metrics["sharpe"],
@@ -768,24 +782,15 @@ def main(
     build_dashboard(index_file="experiments/index.csv", output_file="experiments/index.html")
 
 if __name__ == '__main__':
-    
-    main(
-        # 数据配置
-        parquet_file='../data/wind_daily_2010_adj.parquet',
-        # parquet_file='~/etf_daily.parquet',
-        num_stocks=100,
-        min_data_length=210,
-        fromdate=datetime(2020, 2, 1),
-        todate=datetime(2025, 12, 31),
-        # 数据列名配置
-        
-        # 策略参数
-        top_n_stocks=5,
-        momentum_period=22,
-        amt_weight=100,
-        rebalance_period='weekly',
-        # 资金配置
-        initial_cash=100000.0,
-        commission=0.0003,
+    parser = argparse.ArgumentParser(description="MomAmtStrtg backtest runner")
+    parser.add_argument(
+        "--config",
+        default=None,
+        help="Path to JSON/YAML config (default: configs/mom_amt_strategy.json)",
     )
+    args = parser.parse_args()
+    default_config = get_repo_root() / "configs" / "mom_amt_strategy.json"
+    config_path = args.config or str(default_config)
+    config = load_config(config_path)
+    main(config)
 

@@ -6,6 +6,7 @@
 from __future__ import (absolute_import, division, print_function, unicode_literals)
 
 import backtrader as bt
+import argparse
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -14,6 +15,7 @@ from datetime import datetime
 import platform
 import os
 import math
+from mystrategies.config_loader import load_config, get_repo_root
 
 # 导入策略类和绘图函数
 from SimpleFactorStrategy import SimpleFactorStrategy, plot_equity_curve
@@ -155,18 +157,19 @@ def prepare_data_feeds(raw_data, code_col, detected_fields, max_stocks=None,back
     return data_feeds
 
 
-def run_backtest(data_feeds, detected_fields, top_n_stocks, initial_cash=100000.0, verbose=False):
+def run_backtest(data_feeds, detected_fields, top_n_stocks, backtest_start, backtest_end,
+                 initial_cash=100000.0, commission=0.001, verbose=False):
     """运行单次回测，返回指标"""
     cerebro = bt.Cerebro()
     cerebro.broker.setcash(initial_cash)
-    cerebro.broker.setcommission(commission=0.001)
+    cerebro.broker.setcommission(commission=commission)
     
     # 添加数据源
     for feed_info in data_feeds:
         data_feed = bt.feeds.PandasData(
             dataname=feed_info['data'],
-            fromdate=datetime(2020, 1, 1),
-            todate=datetime(2025, 12, 31),
+            fromdate=backtest_start,
+            todate=backtest_end,
             open=detected_fields['open'],
             high=detected_fields['high'],
             low=detected_fields['low'],
@@ -414,10 +417,11 @@ def plot_2d_heatmap(results_df, metric='total_return', title='参数扫描热力
     return fig
 
 
-def run_2d_param_sweep(raw_data, code_col, detected_fields, 
+def run_2d_param_sweep(raw_data, code_col, detected_fields,
                        max_stocks_values, top_n_values,
                        backtest_start, backtest_end,
-                       plot_curves=True, save_dir='param_sweep_curves'):
+                       plot_curves=True, save_dir='param_sweep_curves',
+                       initial_cash=100000.0, commission=0.001):
     """
     运行二维参数扫描
     
@@ -457,7 +461,8 @@ def run_2d_param_sweep(raw_data, code_col, detected_fields,
             
             try:
                 metrics, strat, initial_value, final_value = run_backtest(
-                    data_feeds, detected_fields, top_n, verbose=True
+                    data_feeds, detected_fields, top_n, backtest_start, backtest_end,
+                    initial_cash=initial_cash, commission=commission, verbose=True
                 )
                 
                 # 添加 max_stocks 到结果
@@ -553,11 +558,12 @@ def plot_equity_curve_to_file(strategy, initial_value, final_value, output_file,
     print(f'  收益曲线已保存到: {output_file}')
 
 
-def run_1d_param_sweep(raw_data, code_col, detected_fields, 
+def run_1d_param_sweep(raw_data, code_col, detected_fields,
                        top_n_values, max_stocks=None,
-                       backtest_start=datetime(2020, 1, 1), 
+                       backtest_start=datetime(2020, 1, 1),
                        backtest_end=datetime(2025, 12, 31),
-                       plot_curves=True, save_dir='param_sweep_curves'):
+                       plot_curves=True, save_dir='param_sweep_curves',
+                       initial_cash=100000.0, commission=0.001):
     """
     运行一维参数扫描（只扫描 top_n）
     
@@ -594,7 +600,8 @@ def run_1d_param_sweep(raw_data, code_col, detected_fields,
         
         try:
             metrics, strat, initial_value, final_value = run_backtest(
-                data_feeds, detected_fields, top_n, verbose=True
+                data_feeds, detected_fields, top_n, backtest_start, backtest_end,
+                initial_cash=initial_cash, commission=commission, verbose=True
             )
             
             metrics['top_n'] = top_n
@@ -690,30 +697,68 @@ def plot_sweep_summary(results_df):
 
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description="Parameter sweep runner")
+    parser.add_argument(
+        "--config",
+        default=None,
+        help="Path to JSON/YAML config (default: configs/param_sweep.json)",
+    )
+    args = parser.parse_args()
+    default_config = get_repo_root() / "configs" / "param_sweep.json"
+    config_path = args.config or str(default_config)
+    config = load_config(config_path)
+
     print('=' * 60)
     print('参数扫描: top_n_stocks 敏感性分析')
     print('=' * 60)
-    
-    # 加载数据
-    raw_data, code_col, detected_fields = load_data('~/etf_daily.parquet')
-    # raw_data, code_col, detected_fields = load_data('~/wind_daily_2010_adj.parquet')
-    # 定义参数空间
-    top_n_values = [1, 5]  # 持仓数量
-    # top_n_values = [3]
-    max_stocks = None  # 限制股票数量加快测试
-    
-    # 回测时间范围
-    backtest_start = datetime(2020, 2, 1)
-    backtest_end = datetime(2025, 12, 31)
-    
-    # 运行一维参数扫描
-    results_df = run_1d_param_sweep(
-        raw_data, code_col, detected_fields,
-        top_n_values, max_stocks=max_stocks,
-        backtest_start=backtest_start, backtest_end=backtest_end,
-        plot_curves=True,
-        save_dir='param_sweep_curves'
-    )
+
+    data_cfg = config.get("data", {})
+    sweep_cfg = config.get("sweep", {})
+    plot_cfg = config.get("plot", {})
+    backtest_cfg = config.get("backtest", {})
+
+    data_file = data_cfg.get("file_path", "~/etf_daily.parquet")
+    raw_data, code_col, detected_fields = load_data(data_file)
+
+    top_n_values = sweep_cfg.get("top_n_values", [1, 5])
+    max_stocks = sweep_cfg.get("max_stocks", None)
+    max_stocks_values = sweep_cfg.get("max_stocks_values", [])
+    two_d = sweep_cfg.get("two_d", False)
+
+    backtest_start = data_cfg.get("backtest_start", datetime(2020, 2, 1))
+    backtest_end = data_cfg.get("backtest_end", datetime(2025, 12, 31))
+
+    plot_curves = plot_cfg.get("plot_curves", True)
+    save_dir = plot_cfg.get("save_dir", "param_sweep_curves")
+
+    initial_cash = backtest_cfg.get("initial_cash", 100000.0)
+    commission = backtest_cfg.get("commission", 0.001)
+
+    if two_d:
+        if not max_stocks_values:
+            raise ValueError("two_d is True but max_stocks_values is empty")
+        results_df = run_2d_param_sweep(
+            raw_data, code_col, detected_fields,
+            max_stocks_values=max_stocks_values,
+            top_n_values=top_n_values,
+            backtest_start=backtest_start,
+            backtest_end=backtest_end,
+            plot_curves=plot_curves,
+            save_dir=save_dir,
+            initial_cash=initial_cash,
+            commission=commission,
+        )
+    else:
+        results_df = run_1d_param_sweep(
+            raw_data, code_col, detected_fields,
+            top_n_values, max_stocks=max_stocks,
+            backtest_start=backtest_start,
+            backtest_end=backtest_end,
+            plot_curves=plot_curves,
+            save_dir=save_dir,
+            initial_cash=initial_cash,
+            commission=commission,
+        )
     
     if len(results_df) == 0:
         print('错误: 没有有效的回测结果')
