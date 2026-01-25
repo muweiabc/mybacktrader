@@ -15,15 +15,18 @@ class RunLogger:
         self.index_file = Path(index_file)
         self.run_dir = None
         self.run_id = None
+        self.run_time = None
 
     def start(self, config: dict):
-        day = datetime.date.today().strftime("%Y-%m-%d")
-        run_id = f"run_{datetime.datetime.now().strftime('%H%M%S')}_{_short_hash(config)}"
+        now = datetime.datetime.now()
+        day = now.strftime("%Y-%m-%d")
+        run_id = f"run_{now.strftime('%H%M%S')}_{_short_hash(config)}"
         run_dir = self.root_dir / day / run_id
         run_dir.mkdir(parents=True, exist_ok=False)
 
         self.run_dir = run_dir
         self.run_id = run_id
+        self.run_time = now.strftime("%Y-%m-%d %H:%M:%S")
 
         self.save_json("config.json", config)
         return run_id, run_dir
@@ -45,15 +48,17 @@ class RunLogger:
 
     def append_index_row(self, row: dict):
         self.index_file.parent.mkdir(parents=True, exist_ok=True)
-        df = pd.DataFrame([row])
+        new_df = pd.DataFrame([row])
         if self.index_file.exists():
-            df.to_csv(self.index_file, mode="a", header=False, index=False, encoding="utf-8-sig")
+            existing_df = pd.read_csv(self.index_file)
+            merged_df = pd.concat([existing_df, new_df], ignore_index=True, sort=False)
+            merged_df.to_csv(self.index_file, index=False, encoding="utf-8-sig")
         else:
-            df.to_csv(self.index_file, index=False, encoding="utf-8-sig")
+            new_df.to_csv(self.index_file, index=False, encoding="utf-8-sig")
 
 
 def build_dashboard(index_file="experiments/index.csv", output_file="experiments/index.html",
-                    template_file="templates/experiment_dashboard.html"):
+                    template_file="dashboard/experiment_dashboard.html"):
     """生成实验总览HTML（从 index.csv 构建）"""
     index_path = Path(index_file)
     output_path = Path(output_file)
@@ -85,8 +90,8 @@ def build_dashboard(index_file="experiments/index.csv", output_file="experiments
 
     # 准备展示列
     display_cols = []
-    for col in ["run_id", "date", "strategy", "total_return_pct", "sharpe", "max_drawdown",
-                "config_link", "metrics_link", "curve_csv_link", "curve_png_link", "run_link", "curve_link"]:
+    for col in ["run_id", "run_time", "strategy", "total_return_pct", "sharpe", "max_drawdown",
+                "run_link", "curve_link"]:
         if col in df.columns:
             display_cols.append(col)
     if not display_cols:
