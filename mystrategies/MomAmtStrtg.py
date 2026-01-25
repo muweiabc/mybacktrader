@@ -9,21 +9,30 @@ from utils import setup_chinese_font
 import matplotlib.pyplot as plt
 from datetime import datetime
 import matplotlib.dates as mdates
+from pathlib import Path
+from runlogger import RunLogger, build_dashboard
 # 初始化中文字体
 setup_chinese_font()
 
-class SimpleFactorStrategy(bt.Strategy):
+
+class PandasDataWithAmt(bt.feeds.PandasData):
+    """扩展PandasData以包含成交额(AMT)字段"""
+    lines = ('amt',)
+    params = (('amt', -1),)  # -1 表示使用列名映射
+
+
+class MomAmtStrtg(bt.Strategy):
     """
-    一个简化的动量与股价双因子选股策略
+    一个简化的动量与市值双因子选股策略
     - 动量：过去20个交易日的回报率
-    - 价格倒数：以当前收盘价的倒数作为代理因子 (越低越好，但我们用倒数让它越高越好)
-    composite_score = mom_score + (val_score * val_weight) #
+    - 市值：以成交量作为代理因子
+    composite_score = mom_score + (amt_score * val_weight) #
     """
     params = (
         ('momentum_period', 20),  # 动量计算周期
         ('top_n_stocks', 10),      # 每期买入排名前N的股票数量
         ('rebalance_period', 'monthly'),  # 换仓周期: 'monthly' (每月) 或 'weekly' (每周)
-        ('val_weight', 100),  # 估值权重
+        ('amt_weight', 100),  # 估值权重
     )
 
     def __init__(self):
@@ -100,6 +109,7 @@ class SimpleFactorStrategy(bt.Strategy):
         # 3. 计算因子并进行排序
 
         candidates = []
+        amt_scores = []
         for data in self.datas:
             name = data._name
             mom_ind = self.momentum_indicators[name]
@@ -114,24 +124,32 @@ class SimpleFactorStrategy(bt.Strategy):
 
             # 因子值获取
             mom_score = mom_ind[0]             # 动量得分 (越高越好)
-            # 使用安全的除法，避免除零错误
-            val_score = 1.0 / data.close[0] if data.close[0] > 0 else 0.0    # 估值得分 (股价倒数，越高越好)
-
-            # 组合因子 (简化为相加)
-            # 实际中会进行标准化、加权和回归等复杂处理
-            composite_score = mom_score + (val_score * self.p.val_weight) # 估值权重放大
-            # print(f'{name} 动量得分: {mom_score}, 估值得分: {val_score}, 综合得分: {composite_score}')
+            # 使用成交额(AMT)的倒数作为估值因子（成交额越低越好，用倒数让它越高越好）
+            amt_value = data.amt[0] if hasattr(data, 'amt') and data.amt[0] > 0 else 0
+            raw_amt_score = 1.0 / amt_value if amt_value > 0 else 0.0    # 成交额倒数 (越高越好)
 
             candidates.append({
                 'name': name,
                 'data': data,
-                'score': composite_score,
+                'score': None,
                 'mom': mom_score,
-                'val': val_score
+                'amt_score': raw_amt_score
             })
+            amt_scores.append(raw_amt_score)
 
         if not candidates:
             return
+
+        # 市值得分归一化（Z-Score），避免过小影响综合得分
+        amt_mean = float(np.mean(amt_scores)) if amt_scores else 0.0
+        amt_std = float(np.std(amt_scores, ddof=0)) if amt_scores else 0.0
+        denom = amt_std if amt_std > 0 else 1.0
+
+        for stock in candidates:
+            norm_amt_score = (stock['amt_score'] - amt_mean) / denom
+            stock['amt_score'] = norm_amt_score
+            stock['score'] = stock['mom'] + (norm_amt_score * self.p.amt_weight)
+            print(f"{stock['name']} 动量得分: {stock['mom']}, 市值得分: {norm_amt_score}, 综合得分: {stock['score']}")
 
         # 按综合得分从高到低排序
         candidates.sort(key=lambda x: x['score'], reverse=True)
@@ -172,10 +190,23 @@ class SimpleFactorStrategy(bt.Strategy):
     
     # --- 日志和订单处理函数（可选，但推荐） ---
     def log(self, txt, dt=None):
+        """
+        输出日志
+
+        Args:
+            txt: 日志内容
+            dt: 指定日期（默认使用当前数据日期）
+        """
         dt = dt or self.datas[0].datetime.date(0)
         print('%s, %s' % (dt.isoformat(), txt))
 
     def notify_order(self, order):
+        """
+        订单状态通知回调
+
+        Args:
+            order: Backtrader 订单对象
+        """
         # 订单状态通知
         if order.status in [order.Submitted, order.Accepted]:
             return
@@ -190,10 +221,15 @@ class SimpleFactorStrategy(bt.Strategy):
             self.log('Order Failed/Rejected')
 
 # --- 绘图函数 ---
-def plot_equity_curve(strategy, initial_value, final_value):
+def plot_equity_curve(strategy, initial_value, final_value, output_file=None, show=False):
     """
     绘制收益曲线图，标注最大回撤
     输出到equity_curve.png
+
+    Args:
+        strategy: 回测得到的策略实例（需要包含资产曲线相关字段）
+        initial_value: 初始资金
+        final_value: 最终资产
     """
     if not hasattr(strategy, 'portfolio_values') or len(strategy.portfolio_values) == 0:
         print('警告: 没有资产价值数据，无法绘制图表')
@@ -289,13 +325,17 @@ def plot_equity_curve(strategy, initial_value, final_value):
     
     plt.tight_layout()
     
-    # 保存图片
-    output_file = 'equity_curve.png'
-    plt.savefig(output_file, dpi=300, bbox_inches='tight')
-    print(f'收益曲线图已保存到: {output_file}')
+    # 保存图片（可选）
+    if output_file:
+        plt.savefig(output_file, dpi=300, bbox_inches='tight')
+        print(f'收益曲线图已保存到: {output_file}')
     
-    # 显示图表
-    plt.show()
+    # 显示图表或关闭
+    if show:
+        plt.show()
+    else:
+        plt.close(fig)
+    return fig
 
 # --- 回测运行部分 ---
 
@@ -303,8 +343,20 @@ import os
 import math
 
 
-def load_and_validate_data(parquet_file, code_col, col_open, col_high, col_low, col_close, col_volume):
-    """加载并验证 parquet 数据文件"""
+def load_and_validate_data(parquet_file, code_col, col_open, col_high, col_low, col_close, col_volume, col_amt='AMT'):
+    """
+    加载并验证 parquet 数据文件
+
+    Args:
+        parquet_file: parquet 文件路径（支持 ~ 展开）
+        code_col: 股票代码列名
+        col_open: 开盘价列名
+        col_high: 最高价列名
+        col_low: 最低价列名
+        col_close: 收盘价列名
+        col_volume: 成交量列名
+        col_amt: 成交额列名（默认 AMT）
+    """
     parquet_file = os.path.expanduser(parquet_file)
     print(f'正在读取 {parquet_file}...')
     
@@ -329,14 +381,36 @@ def load_and_validate_data(parquet_file, code_col, col_open, col_high, col_low, 
         if col_name not in raw_data.columns:
             raise ValueError(f'无法找到 {field} 字段: {col_name}')
     
-    print(f'OHLCV列: open={col_open}, high={col_high}, low={col_low}, close={col_close}, volume={col_volume}')
+    # 验证AMT列
+    if col_amt not in raw_data.columns:
+        print(f'警告: 无法找到成交额列 {col_amt}，将使用 volume*close 作为替代')
+        raw_data[col_amt] = raw_data[col_volume] * raw_data[col_close]
+    
+    print(f'OHLCV列: open={col_open}, high={col_high}, low={col_low}, close={col_close}, volume={col_volume}, amt={col_amt}')
     
     return raw_data
 
 
 def add_data_feeds(cerebro, raw_data, code_col, col_open, col_high, col_low, col_close, col_volume,
-                   num_stocks, min_data_length, fromdate, todate):
-    """添加股票数据源到 cerebro"""
+                   num_stocks, min_data_length, fromdate, todate, col_amt='AMT'):
+    """
+    添加股票数据源到 cerebro
+
+    Args:
+        cerebro: Backtrader Cerebro 实例
+        raw_data: 原始行情数据 DataFrame
+        code_col: 股票代码列名
+        col_open: 开盘价列名
+        col_high: 最高价列名
+        col_low: 最低价列名
+        col_close: 收盘价列名
+        col_volume: 成交量列名
+        num_stocks: 抽样股票数量
+        min_data_length: 最小数据长度（过滤不足样本）
+        fromdate: 回测起始日期
+        todate: 回测结束日期
+        col_amt: 成交额列名（默认 AMT）
+    """
     ohlc_cols = [col_open, col_high, col_low, col_close]
     grouped = raw_data.groupby(code_col)
     print(f'找到 {len(grouped)} 只股票')
@@ -370,8 +444,8 @@ def add_data_feeds(cerebro, raw_data, code_col, col_open, col_high, col_low, col
         if len(stock_data) < min_data_length:
             continue
         
-        # 创建 PandasData feed
-        data_feed = bt.feeds.PandasData(
+        # 创建 PandasDataWithAmt feed (包含AMT字段)
+        data_feed = PandasDataWithAmt(
             dataname=stock_data,
             fromdate=fromdate,
             todate=todate,
@@ -380,6 +454,7 @@ def add_data_feeds(cerebro, raw_data, code_col, col_open, col_high, col_low, col
             low=col_low,
             close=col_close,
             volume=col_volume,
+            amt=col_amt,
             name=str(stock_code)
         )
         
@@ -392,7 +467,12 @@ def add_data_feeds(cerebro, raw_data, code_col, col_open, col_high, col_low, col
 
 
 def add_analyzers(cerebro):
-    """添加分析器到 cerebro"""
+    """
+    添加分析器到 cerebro
+
+    Args:
+        cerebro: Backtrader Cerebro 实例
+    """
     cerebro.addanalyzer(bt.analyzers.SharpeRatio, _name='sharpe',
                         timeframe=bt.TimeFrame.Days, annualize=True)
     cerebro.addanalyzer(bt.analyzers.DrawDown, _name='drawdown')
@@ -408,7 +488,14 @@ def add_analyzers(cerebro):
 
 
 def print_analysis_report(strat, initial_value, final_value):
-    """打印策略分析报告"""
+    """
+    打印策略分析报告
+
+    Args:
+        strat: 回测得到的策略实例
+        initial_value: 初始资金
+        final_value: 最终资产
+    """
     print('\n' + '=' * 60)
     print('策略分析报告')
     print('=' * 60)
@@ -491,7 +578,7 @@ def print_analysis_report(strat, initial_value, final_value):
 
 def main(
     # ===== 数据配置 =====
-    parquet_file='~/wind_daily_2010_adj.parquet',
+    parquet_file,
     num_stocks=100,
     min_data_length=210,
     fromdate=datetime(2020, 1, 1),
@@ -503,16 +590,64 @@ def main(
     col_low='LOW',
     col_close='CLOSE',
     col_volume='VOLUME',
+    col_amt='AMT',
     # ===== 策略参数 =====
     top_n_stocks=3,
     momentum_period=20,
-    val_weight=100,
+    amt_weight=100,
     rebalance_period='monthly',
     # ===== 资金配置 =====
     initial_cash=100000.0,
-    commission=0.001,
-):
-    """回测主函数"""
+    commission=0.001,):
+    """
+    回测主函数
+
+    Args:
+        parquet_file: parquet 文件路径
+        num_stocks: 随机抽样股票数量
+        min_data_length: 最小数据长度（过滤不足样本）
+        fromdate: 回测起始日期
+        todate: 回测结束日期
+        code_col: 股票代码列名
+        col_open: 开盘价列名
+        col_high: 最高价列名
+        col_low: 最低价列名
+        col_close: 收盘价列名
+        col_volume: 成交量列名
+        col_amt: 成交额列名
+        top_n_stocks: 每期买入股票数量
+        momentum_period: 动量计算周期
+        amt_weight: 成交量代表的市值的权重
+        rebalance_period: 换仓周期（monthly/weekly）
+        initial_cash: 初始资金
+        commission: 手续费率
+    """
+    # ===== 运行配置与日志 =====
+    config = {
+        "strategy": "MomAmtStrtg",
+        "parquet_file": parquet_file,
+        "num_stocks": num_stocks,
+        "min_data_length": min_data_length,
+        "fromdate": fromdate,
+        "todate": todate,
+        "code_col": code_col,
+        "col_open": col_open,
+        "col_high": col_high,
+        "col_low": col_low,
+        "col_close": col_close,
+        "col_volume": col_volume,
+        "col_amt": col_amt,
+        "top_n_stocks": top_n_stocks,
+        "momentum_period": momentum_period,
+        "amt_weight": amt_weight,
+        "rebalance_period": rebalance_period,
+        "initial_cash": initial_cash,
+        "commission": commission,
+    }
+
+    logger = RunLogger(root_dir="experiments", index_file="experiments/index.csv")
+    run_id, run_dir = logger.start(config)
+
     # 初始化 cerebro
     cerebro = bt.Cerebro()
     cerebro.broker.setcash(initial_cash)
@@ -521,13 +656,13 @@ def main(
     # 加载数据
     try:
         raw_data = load_and_validate_data(
-            parquet_file, code_col, col_open, col_high, col_low, col_close, col_volume
+            parquet_file, code_col, col_open, col_high, col_low, col_close, col_volume, col_amt
         )
         
         # 添加数据源
         add_data_feeds(
             cerebro, raw_data, code_col, col_open, col_high, col_low, col_close, col_volume,
-            num_stocks, min_data_length, fromdate, todate
+            num_stocks, min_data_length, fromdate, todate, col_amt
         )
     except FileNotFoundError:
         print(f'错误: 找不到文件 {parquet_file}')
@@ -540,10 +675,10 @@ def main(
 
     # 添加策略
     cerebro.addstrategy(
-        SimpleFactorStrategy,
+        MomAmtStrtg,
         top_n_stocks=top_n_stocks,
         momentum_period=momentum_period,
-        val_weight=val_weight,
+        amt_weight=amt_weight,
         rebalance_period=rebalance_period
     )
 
@@ -567,17 +702,78 @@ def main(
     final_value = cerebro.broker.getvalue()
     print_analysis_report(strat, initial_value, final_value)
 
-    # 绘制收益曲线
+    # ===== 汇总指标 =====
+    returns = strat.analyzers.returns.get_analysis()
+    sharpe = strat.analyzers.sharpe.get_analysis()
+    drawdown = strat.analyzers.drawdown.get_analysis()
+    calmar = strat.analyzers.calmar.get_analysis()
+    trades = strat.analyzers.trades.get_analysis()
+
+    total_return_pct = (final_value - initial_value) / initial_value * 100
+    metrics = {
+        "run_id": run_id,
+        "strategy": "MomAmtStrtg",
+        "initial_value": initial_value,
+        "final_value": final_value,
+        "total_return_pct": total_return_pct,
+        "sharpe": sharpe.get("sharperatio"),
+        "max_drawdown": drawdown.get("max", {}).get("drawdown", 0),
+        "calmar": calmar.get("calmar"),
+        "total_trades": trades.get("total", {}).get("total", 0),
+        "rtot": returns.get("rtot", 0),
+        "rnorm": returns.get("rnorm", 0),
+    }
+
+    # ===== 保存 artifacts =====
+    # 曲线数据
+    curve_df = pd.DataFrame({
+        "date": pd.to_datetime(strat.portfolio_dates),
+        "value": strat.portfolio_values,
+        "drawdown": strat.drawdowns,
+    })
+    curve_path = logger.save_df("equity_curve.csv", curve_df)
+
+    # 曲线图
     print('\n正在生成收益曲线图...')
-    plot_equity_curve(strat, initial_value, final_value)
+    fig = plot_equity_curve(strat, initial_value, final_value, output_file=None, show=False)
+    curve_img_path = logger.save_fig("equity_curve.png", fig)
+
+    # 保存指标
+    metrics_path = logger.save_json("metrics.json", metrics)
+
+    # 生成单次运行HTML
+    run_index = Path(run_dir) / "index.html"
+    run_template = Path("templates/experiment_run.html")
+    if run_template.exists():
+        run_html = run_template.read_text(encoding="utf-8").format(run_id=run_id)
+    else:
+        run_html = f"<h1>Run {run_id}</h1>"
+    run_index.write_text(run_html, encoding="utf-8")
+
+    # ===== 写索引 =====
+    logger.append_index_row({
+        "run_id": run_id,
+        "date": datetime.now().strftime("%Y-%m-%d"),
+        "strategy": "MomAmtStrtg",
+        "total_return_pct": total_return_pct,
+        "sharpe": metrics["sharpe"],
+        "max_drawdown": metrics["max_drawdown"],
+        "run_dir": str(run_dir),
+        "equity_curve": curve_img_path,
+        "metrics_path": metrics_path,
+        "curve_csv": curve_path,
+    })
+
+    # ===== 生成总览dashboard =====
+    build_dashboard(index_file="experiments/index.csv", output_file="experiments/index.html")
 
 if __name__ == '__main__':
     
     main(
         # 数据配置
-        # parquet_file='~/wind_daily_2010_adj.parquet',
-        parquet_file='~/etf_daily.parquet',
-        num_stocks=200,
+        parquet_file='../data/wind_daily_2010_adj.parquet',
+        # parquet_file='~/etf_daily.parquet',
+        num_stocks=100,
         min_data_length=210,
         fromdate=datetime(2020, 2, 1),
         todate=datetime(2025, 12, 31),
@@ -586,7 +782,7 @@ if __name__ == '__main__':
         # 策略参数
         top_n_stocks=5,
         momentum_period=22,
-        val_weight=0,
+        amt_weight=100,
         rebalance_period='weekly',
         # 资金配置
         initial_cash=100000.0,

@@ -30,7 +30,7 @@ class SmallCapMomentumStrategy(bt.Strategy):
         lookback=60,
         ma_period=120,
         rebalance_months=1,
-        smallcap_pct=0.3,   # 后30%
+        smallcap_pct=0.3,   # 后30%小盘股
         hold_num=10,
     )
 
@@ -79,24 +79,26 @@ class SmallCapMomentumStrategy(bt.Strategy):
             return
 
         # ===== 按流通市值或收盘价排序（小盘在前） =====
-        # 如果有 free_mktcap 字段则使用，否则用收盘价作为替代
-        # if hasattr(self.datas[0], 'free_mktcap') and len(self.datas[0].free_mktcap) > 0:
-        #     try:
-        #         candidates.sort(key=lambda d: d.free_mktcap[0])
-        #     except:
-        #         # 如果访问 free_mktcap 出错，使用收盘价
-        #         candidates.sort(key=lambda d: d.close[0])
-        # else:
-        #     # 没有流通市值，用收盘价排序（低价股通常是小盘股）
-        #     candidates.sort(key=lambda d: d.close[0])
+        # 如果有 amt 字段则使用，否则用收盘价作为替代
+        # ===== 综合因子：按成交额(市值) & 动量 =====
+        stock_factors = []
+        for d in candidates:
+            # 首选用 amt 作为市值
+            
+            amt_val = d.amt[0]
+            
+            # 动量
+            momentum_val = self.returns[d][0] if pd.notna(self.returns[d][0]) else 0
+            # 归一化市值[市值越小因子越高]，先简单取倒数（实际可z-score/分组等）
+            value_factor = 1.0 / amt_val if amt_val > 0 else 0
+            # 综合分（可以自定义权重，这里都权重为1）
+            composite_score = value_factor + momentum_val
+            stock_factors.append({'data': d, 'score': composite_score, 'amt': amt_val, 'momentum': momentum_val})
 
-        # smallcap_num = int(len(candidates) * self.p.smallcap_pct)
-        # smallcaps = candidates[:smallcap_num]
+        # 按综合得分降序排列，选出目标池
+        stock_factors.sort(key=lambda x: x['score'], reverse=True)
 
-        # ===== 再按动量排序 =====
-        candidates.sort(key=lambda d: self.returns[d][0], reverse=True)
-        targets = candidates[:self.p.hold_num]
-
+        targets = [x['data'] for x in stock_factors[:self.p.hold_num]]
         target_set = set(targets)
 
         # ===== 卖出不在目标池的 =====

@@ -6,6 +6,7 @@
 - 每月初将所有股票按成交额分成10组
 - 做多第10组(最小市值组)，做空第1组(最大市值组)
 - 回测过去5年的表现
+- 适用于震荡市或者熊市，不适用牛市会把大盘上涨丢掉
 
 数据来源:
 - 市值代理: ~/etf_daily.parquet 或 ~/wind_daily_2010_adj.parquet 中的 AMT 列
@@ -234,7 +235,7 @@ class MarketCapLongShortStrategy(bt.Strategy):
             self.log('Order Failed/Rejected')
 
 
-def plot_equity_curve(strategy, initial_value, final_value, output_file='market_cap_strategy_curve.png'):
+def plot_equity_curve(strategy, initial_value, final_value, output_file='graphs/marketcap_longshort_strategy_curve.png'):
     """绘制收益曲线图"""
     if not hasattr(strategy, 'portfolio_values') or len(strategy.portfolio_values) == 0:
         print('警告: 没有资产价值数据，无法绘制图表')
@@ -308,12 +309,12 @@ def plot_equity_curve(strategy, initial_value, final_value, output_file='market_
     plt.close()  # 关闭图表，不显示
 
 
-def main(num_stocks=300, num_groups=10, long_group=10, short_group=1):
+def main(top_amt_stocks=300, num_groups=10, long_group=10, short_group=1):
     """
     运行市值分组多空策略回测
     
     参数:
-    - num_stocks: 使用的股票数量
+    - top_amt_stocks: top_amt_stocks
     - num_groups: 分组数量（默认10组）
     - long_group: 做多的组号（默认10，最小市值组）
     - short_group: 做空的组号（默认1，最大市值组）
@@ -371,28 +372,29 @@ def main(num_stocks=300, num_groups=10, long_group=10, short_group=1):
         avg_amt_by_stock = recent_data.groupby(code_col)['AMT'].mean().sort_values(ascending=False)
         
         # 选择平均成交额最高的股票（确保有足够流动性）
-        selected_stocks = avg_amt_by_stock.head(num_stocks).index.tolist()
+        selected_stocks = avg_amt_by_stock.head(top_amt_stocks).index.tolist()
         print(f'选择了 {len(selected_stocks)} 只股票进行回测')
         
-        # 为每个股票创建数据源
+        # 为每个股票创建数据源 - 使用groupby提高效率
         added_count = 0
-        for stock_code in selected_stocks:
-            stock_data = raw_data[raw_data[code_col] == stock_code].copy()
+        # 先筛选出selected_stocks的数据，再groupby，避免多次全表扫描
+        selected_raw_data = raw_data[raw_data[code_col].isin(selected_stocks)]
+        ohlc_cols = ['OPEN', 'HIGH', 'LOW', 'CLOSE']
+        
+        for stock_code, stock_data in selected_raw_data.groupby(code_col):
+            stock_data = stock_data.copy()
             stock_data.sort_index(inplace=True)
             stock_data = stock_data.drop(columns=[code_col])
             
             if len(stock_data) == 0:
                 continue
             
-            # 数据清理
-            ohlc_cols = ['OPEN', 'HIGH', 'LOW', 'CLOSE']
+            # 数据清理 - 一次性构建mask
+            valid_mask = pd.Series(True, index=stock_data.index)
             for col in ohlc_cols:
                 if col in stock_data.columns:
-                    stock_data = stock_data[
-                        (stock_data[col] > 0) & 
-                        (stock_data[col].notna()) &
-                        (stock_data[col] != float('inf'))
-                    ]
+                    valid_mask &= (stock_data[col] > 0) & (stock_data[col].notna()) & (stock_data[col] != float('inf'))
+            stock_data = stock_data[valid_mask]
             
             # 检查在回测期间是否有足够数据
             backtest_data = stock_data[(stock_data.index >= start_date) & (stock_data.index <= end_date)]
@@ -552,5 +554,5 @@ if __name__ == '__main__':
     # - num_groups: 分成10组
     # - long_group: 做多第10组(最小市值)
     # - short_group: 做空第1组(最大市值)
-    main(num_stocks=1000, num_groups=10, long_group=10, short_group=1)
+    main(top_amt_stocks=1000, num_groups=10, long_group=10, short_group=1)
 
